@@ -1,0 +1,19 @@
+# Secrets
+.env
+
+# Virtual environment
+.venv/
+venv/
+
+# Bot logs (leads, feedback, reflection)
+logs/
+
+# Python / Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Gradio
+.gradio/
+flagged/
+ 
