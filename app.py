@@ -109,6 +109,7 @@ Tone and style:
 - Use a short list only to compare rooms or to show steps.
 - When it helps, end with one clear next step, for example booking a viewing.
   Do not repeat the same offer in every reply.
+- Do not end every reply with an invitation to ask more questions.
 """.strip()
 
 
@@ -504,7 +505,8 @@ def chat(message, history):
     intent = route(message, history)
 
     system = build_system_prompt(intent)
-    asked_before = any(turn["role"] == "assistant" and "email" in turn["content"].lower() for turn in history)
+    # True if an earlier reply asked for the contact details or offered a viewing.
+    asked_before = any(turn["role"] == "assistant" and OFFER_PATTERN.search(normalize(turn["content"])) for turn in history)
     if asked_before:
         system += "\n" + ALREADY_ASKED_NOTE  # Do not ask for the contact details in each reply.
     code_notes = []
@@ -532,7 +534,7 @@ def chat(message, history):
             promises = new_promises(final, message, history)
             if intent != "feedback" and promises and "record_feedback" not in called_tools:
                 record_missing_feedback(message, promises)
-            return finish_reply(final, intent, asked_before, message)
+            return finish_reply(final, intent, asked_before, message, history)
 
         # The model called one or more tools: run them and give the results back to the model.
         messages.append(reply.model_dump(exclude_none=True))
@@ -544,7 +546,7 @@ def chat(message, history):
 
     # Too many tool rounds: get a final reply without tools.
     final = generate(messages, CHAT_MODELS, **CHAT_OPTIONS).choices[0].message.content
-    return finish_reply(final, intent, asked_before, message)
+    return finish_reply(final, intent, asked_before, message, history)
 
 
 # Viewing hours: a time in a message, for example "9 am", "6:30 pm" or "15:00".
@@ -562,10 +564,16 @@ ALREADY_ASKED_NOTE = (
     "unless the student talks about booking or seeing a room in this message."
 )
 # A sentence that asks for the contact details or offers a viewing.
-OFFER_PATTERN = re.compile(r"name and email|your email|(book|booking|set up|schedule) a viewing")
+OFFER_PATTERN = re.compile(
+    r"name and email|your email|"
+    r"(book|booking|set up|schedule|scheduling|arrange|plan)( a| your)? (viewing|visit|tour)|"
+    r"like to (see|visit|view|tour) (the|a|it|one|your)"
+)
 
 # End of the reply: added to a reply that does not end with a question, so the student is invited to ask more.
+# The code adds it at most one time in INVITE_EVERY replies, so the student does not read it in each reply.
 ASK_MORE = "Is there anything else you would like to know?"
+INVITE_EVERY = 3
 # A last sentence that already invites more questions. The code replaces it with ASK_MORE.
 INVITE_PATTERN = re.compile(
     r"feel free to (ask|reach out)|let me know|any (other|more) questions|anything else|just ask|looking forward"
@@ -687,10 +695,16 @@ def remove_repeated_offers(reply_text):
     return "\n".join(lines).strip() or reply_text
 
 
-def finish_reply(reply_text, intent, asked_before, message):
+def invited_recently(history):
+    """Return True if one of the last INVITE_EVERY - 1 replies of the assistant invited more questions."""
+    replies = [turn["content"] for turn in history if turn["role"] == "assistant"][-(INVITE_EVERY - 1):]
+    return any(ASK_MORE in reply for reply in replies)
+
+
+def finish_reply(reply_text, intent, asked_before, message, history=()):
     """Make the final reply. Remove a repeated request for the contact details (keep it for a lead message,
     because then the student talks about booking). End the reply with a question that invites the student to ask more,
-    unless the student says goodbye."""
+    unless the student says goodbye or a recent reply already invited more questions."""
     reply_text = (reply_text or "").strip()
     if asked_before and intent != "lead":
         cleaned = remove_repeated_offers(reply_text)
@@ -699,14 +713,22 @@ def finish_reply(reply_text, intent, asked_before, message):
             reply_text = cleaned
     if GOODBYE_PATTERN.search(normalize(message)):
         return reply_text
+    if invited_recently(history):
+        # Remove the model's own closing invitation too, so the student does not read it in each reply.
+        return remove_last_invitation(reply_text)
     if not reply_text.endswith("?"):
         # Remove the model's own closing invitation, so the reply does not invite two times.
-        lines = reply_text.split("\n")
-        sentences = split_sentences(lines[-1])
-        if INVITE_PATTERN.search(normalize(sentences[-1])):
-            lines[-1] = " ".join(sentences[:-1])
-        reply_text = "\n".join(lines).strip() + f"\n\n{ASK_MORE}"
+        reply_text = remove_last_invitation(reply_text) + f"\n\n{ASK_MORE}"
     return reply_text
+
+
+def remove_last_invitation(reply_text):
+    """Remove the last sentence of the reply if it only invites more questions, for example "Let me know!"."""
+    lines = reply_text.split("\n")
+    sentences = split_sentences(lines[-1])
+    if sentences and INVITE_PATTERN.search(normalize(sentences[-1])):
+        lines[-1] = " ".join(sentences[:-1])
+    return "\n".join(lines).strip() or reply_text
 
 
 import gradio as gr
@@ -760,33 +782,106 @@ PAGE_JS = """
 }
 """
 
-CSS = """
-.gradio-container { max-width: 760px !important; margin: auto; }
-footer { display: none !important; }
-/* The assistant's messages are light blue. The student's messages keep the default gray. */
-.message.bot { background: #eaf2ff !important; border-color: #c7dbf7 !important; }
-"""
-
-demo = gr.ChatInterface(
-    fn=respond,
-    validator=not_empty,
-    chatbot=gr.Chatbot(show_label=False, buttons=["copy", "copy_all"]),  # No "Chatbot" label, no share button.
-    title="CampusNest Assistant",
-    description="Ask about rooms, prices and viewings at CampusNest, Hamra.",
-    examples=[
-        "How much is a studio per month?",
-        "Can I book a viewing?",
-        "Do you allow pets?",
-        "The Wi-Fi in my room is not working.",
-    ],
-    cache_examples=False,  # Do not send the examples to the model at start. This costs nothing.
+# The look of the window: a teal theme with a rounded, soft style.
+THEME = gr.themes.Soft(
+    primary_hue="teal",
+    neutral_hue="slate",
+    radius_size="lg",
+    font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
 )
 
+# The header at the top of the window. All the facts come from the business documents.
+HEADER_HTML = """
+<div class="cn-header">
+  <div class="cn-logo">🏠</div>
+  <div>
+    <h1>CampusNest Assistant</h1>
+    <p>Student residence in Hamra, Beirut · 5-minute walk from the AUB Main Gate</p>
+  </div>
+</div>
+<div class="cn-chips">
+  <span>🏷️ From $350 / month</span>
+  <span>⚡ 24/7 electricity</span>
+  <span>📶 Wi-Fi and all bills included</span>
+  <span>📅 Viewings Mon–Sat, 10:00–18:00</span>
+</div>
+"""
+
+# The text in the empty chat, before the first message.
+WELCOME = """### 👋 Hi! I am the CampusNest assistant.
+Ask me about rooms, prices, what is included, or book a viewing."""
+
+FOOTER_HTML = """<div class="cn-footer">CampusNest is a fictional business for a course assignment.
+Only the CampusNest office can confirm that a room is available.</div>"""
+
+CSS = """
+body, .gradio-container { background: linear-gradient(180deg, #e6f6f3 0%, #f8fafc 360px) !important; }
+.gradio-container { max-width: 820px !important; margin: auto !important; }
+footer { display: none !important; }
+
+/* Header */
+.cn-header { display: flex; align-items: center; gap: 16px; padding: 20px 24px; border-radius: 20px;
+             background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
+             box-shadow: 0 10px 28px rgba(15, 118, 110, 0.25); }
+.cn-logo { flex: none; width: 54px; height: 54px; display: grid; place-items: center; font-size: 30px;
+           border-radius: 16px; background: rgba(255, 255, 255, 0.18); }
+.cn-header h1 { margin: 0 !important; font-size: 1.5rem !important; font-weight: 700; color: #ffffff !important; }
+.cn-header p { margin: 4px 0 0 !important; color: #ffffff !important; opacity: 0.9; }
+.cn-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.cn-chips span { padding: 6px 12px; border-radius: 999px; font-size: 0.85rem; color: #134e4a;
+                 background: #ffffff; border: 1px solid #cce7e3; }
+
+/* Chat area and messages. The assistant's messages are white, the student's messages are teal. */
+#cn-chatbot { border-radius: 20px !important; background: #ffffff !important;
+              box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06); }
+.message.bot { background: #f1f8f7 !important; border: 1px solid #d6ece8 !important; }
+.message.user { background: #0f766e !important; border-color: #0f766e !important; }
+.message.user, .message.user * { color: #ffffff !important; }
+
+.cn-footer { text-align: center; font-size: 0.8rem; color: #64748b; margin-top: 4px; }
+"""
+
+with gr.Blocks(title="CampusNest Assistant") as demo:
+    gr.HTML(HEADER_HTML, padding=False)
+    chat_window = gr.ChatInterface(
+        fn=respond,
+        validator=not_empty,
+        chatbot=gr.Chatbot(
+            elem_id="cn-chatbot",
+            show_label=False,
+            buttons=["copy", "copy_all"],  # No "Chatbot" label, no share button.
+            height="calc(100dvh - 310)",  # Fill the page height. 290px = header, text box and footer.
+            min_height=360,  # On a small screen, the chat stays usable.
+            placeholder=WELCOME,
+        ),
+        textbox=gr.Textbox(
+            placeholder="Type your question, for example: How much is a single room?",
+            show_label=False,
+            container=False,
+            submit_btn=True,
+            scale=7,
+        ),
+        examples=[
+            "How much is a studio per month?",
+            "Can I book a viewing?",
+            "Do you allow pets?",
+            "The Wi-Fi in my room is not working.",
+        ],
+        example_labels=[
+            "💰 How much is a studio per month?",
+            "📅 Can I book a viewing?",
+            "🐾 Do you allow pets?",
+            "🛠️ The Wi-Fi in my room is not working.",
+        ],
+        cache_examples=False,  # Do not send the examples to the model at start. This costs nothing.
+    )
+    gr.HTML(FOOTER_HTML, padding=False)
+
 # Remove the undo and retry buttons. A retry runs the tools again and records the same feedback two times.
-demo.chatbot._undoable = False
-demo.chatbot._retryable = False
+chat_window.chatbot._undoable = False
+chat_window.chatbot._retryable = False
 
 gr.close_all()  # Close the window of an earlier run of this cell.
 
 # Open the chat window in the web browser, not in the notebook. The copy button needs a normal browser tab.
-demo.launch(theme=gr.themes.Base(primary_hue="slate"), css=CSS, js=PAGE_JS, inline=False, inbrowser=True)
+demo.launch(theme=THEME, css=CSS, js=PAGE_JS, inline=False, inbrowser=True)

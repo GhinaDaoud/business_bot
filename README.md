@@ -161,7 +161,7 @@ Tests showed that the model does not always obey the instructions. These checks 
 | Viewing hours | The code finds times outside the viewing hours, for example "9 am" or "Sunday". |
 | Repeated offer | After the first request for the email, the code removes repeated requests, except when the student talks about booking. |
 
-The code also ends each reply with "Is there anything else you would like to know?", except after a goodbye.
+The code also ends a reply with "Is there anything else you would like to know?", at most one time in three replies, and not after a goodbye.
 
 ## Chat window
 
