@@ -116,7 +116,7 @@ The router sorts each message before the chat model answers.
 | `feedback` | A complaint, a problem report, or a suggestion | "The Wi-Fi is down." |
 
 1. Keyword rules decide the intent if the message has a clear word, for example "viewing" or "not working". This step costs nothing.
-2. If no keyword matches, a short model call (`gpt-4.1-nano`, temperature 0, strict JSON schema) decides the intent. It also reads the last four messages.
+2. If no keyword matches, a short model call (`gpt-4o-mini`, temperature 0, strict JSON schema) decides the intent. It also reads the last four messages.
 3. Each intent adds its own instruction to the end of the system prompt.
 
 ## Tools
@@ -177,7 +177,7 @@ The code also ends a reply with "Is there anything else you would like to know?"
 | Job | Model | Fallback model |
 |---|---|---|
 | Replies and tool calls | `gpt-4o-mini` | `gpt-4.1-mini` |
-| Router | `gpt-4.1-nano` | `gpt-4o-mini` |
+| Router | `gpt-4o-mini` (before: `gpt-4.1-nano`, retired by OpenAI on 2026-10-23) | `gpt-4.1-mini` |
 | Reflection step | `gpt-4.1-mini` | `gpt-4o-mini` |
 
 One message costs approximately $0.001. Each model call prints its tokens and its cost, for example `[USAGE] gpt-4o-mini: in=3031 (cached 2944) out=27 cost=$0.00025`. The system prompt is the same at the start of each call, so OpenAI keeps it in a cache, and the cached part costs 75% less.

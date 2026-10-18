@@ -2,3 +2,6 @@ openai
 gradio
 pypdf
 python-dotenv
+langgraph
+pandas
+matplotlib

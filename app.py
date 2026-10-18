@@ -23,9 +23,9 @@ load_dotenv(override=True)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=30, max_retries=2)
 
 # Models for each job. The first model is the main model. The next model is the fallback.
-# gpt-4o-mini follows the tool rules reliably. gpt-4.1-nano costs less and is sufficient to sort messages.
+# gpt-4o-mini follows the tool rules reliably. The router used gpt-4.1-nano first; OpenAI retires it on 2026-10-23.
 CHAT_MODELS = ["gpt-4o-mini", "gpt-4.1-mini"]
-ROUTER_MODELS = ["gpt-4.1-nano", "gpt-4o-mini"]
+ROUTER_MODELS = ["gpt-4o-mini", "gpt-4.1-mini"]
 
 # Price in US dollars for 1 million tokens: (input, cached input, output).
 PRICES = {
@@ -41,7 +41,9 @@ RUN_API_TESTS = True
 import openai
 
 # Errors that can stop on one model but not on the next: rate limit, timeout, network, server error.
-RETRY_ERRORS = (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError)
+# NotFoundError: the model is not available (for example, a retired model). Then the next model can answer.
+RETRY_ERRORS = (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError,
+                openai.NotFoundError)
 
 COST = {"dollars": 0.0}  # Total cost of this session.
 
@@ -850,7 +852,7 @@ with gr.Blocks(title="CampusNest Assistant") as demo:
             elem_id="cn-chatbot",
             show_label=False,
             buttons=["copy", "copy_all"],  # No "Chatbot" label, no share button.
-            height="calc(100dvh - 310)",  # Fill the page height. 290px = header, text box and footer.
+            height="calc(100dvh - 310px)",  # Fill the page height. 310px = header, text box and footer.
             min_height=360,  # On a small screen, the chat stays usable.
             placeholder=WELCOME,
         ),
